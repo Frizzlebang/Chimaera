@@ -1,0 +1,27 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: weave-demo-server:latest
+    ports:
+      - "2567:2567"
+    environment:
+      - NODE_ENV=production
+
+  client:
+    image: node:20-alpine
+    working_dir: /client
+    command: sh -c "npm install --no-audit --no-fund && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./client:/client
+    depends_on:
+      - server
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    depends_on:
+      - server
+    command: tunnel --protocol http2 --no-autoupdate --url http://server:2567
