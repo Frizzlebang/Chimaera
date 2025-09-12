@@ -1,7 +1,10 @@
 // ESM version of your room
-import { Room } from "colyseus";
+import colyseusPkg from "colyseus";
+const { Room } = colyseusPkg;
+
 import { Schema, MapSchema } from "@colyseus/schema";
 import * as schema from "@colyseus/schema"; // for defineTypes in JS
+
 
 class PlayerState extends Schema {}
 schema.defineTypes(PlayerState, {
