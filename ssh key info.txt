@@ -1,0 +1,16 @@
+The key fingerprint is:
+SHA256:RcwckuOjcaGMjHaGyk15KDk3/oJE6hwDwwFkuhypNUQ lfa.pessina@gmail.com
+The key's randomart image is:
++--[ED25519 256]--+
+|++E     .=o.     |
+|oo.     +o+      |
+|oo=+oo o o.      |
+|=O=B=.+ +.       |
+|B=Boo  +S.       |
+|o= o  .          |
+|+ + .            |
+| + . .           |
+|    .            |
++----[SHA256]-----+
+
+passphrase: "The weave is real"
