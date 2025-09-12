@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
 import express from "express";
-import { Server } from "colyseus";
+import pkg from 'colyseus';
+const { Server } = pkg;
 
 import { initSchema } from "../db/index.js"; // <-- DB bootstrap (ESM)
 import { DemoRoom } from "./rooms/DemoRoom.js";

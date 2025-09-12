@@ -6,8 +6,6 @@ services:
       context: .
       dockerfile: server/Dockerfile
     image: weave-demo-server:latest
-    ports:
-      - "2567:2567"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://weave:weave@postgres:5432/weave
@@ -15,6 +13,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    ports:
+      - "2567:2567"
 
   cloudflared:
     image: cloudflare/cloudflared:latest
