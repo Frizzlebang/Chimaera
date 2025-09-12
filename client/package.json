@@ -12,6 +12,13 @@
     "colyseus.js": "^0.15.17"
   },
   "devDependencies": {
-    "vite": "^5.4.0"
-  }
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "vite": "^7.1.5"
+  },
+  "description": "",
+  "main": "vite.config.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }

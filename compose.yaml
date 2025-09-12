@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   server:
     build:
@@ -8,6 +10,11 @@ services:
       - "2567:2567"
     environment:
       - NODE_ENV=production
+      - DATABASE_URL=postgresql://weave:weave@postgres:5432/weave
+      - JWT_SECRET=dev_dev_dev
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -18,3 +25,22 @@ services:
     # environment:
     #   - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     # command: tunnel --no-autoupdate run
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: weave
+      POSTGRES_PASSWORD: weave
+      POSTGRES_DB: weave
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weave"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
