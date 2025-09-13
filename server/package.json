@@ -4,11 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
   },
   "dependencies": {
     "@colyseus/schema": "^2.0.37",
     "colyseus": "^0.15.57",
+    "dotenv": "^17.2.2",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.16.3",

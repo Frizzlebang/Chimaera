@@ -8,6 +8,7 @@ build/
 out/
 
 # Env & secrets
+chimaera.env
 .env
 .env.*
 !*.example

@@ -1,13 +1,19 @@
+version: "3.9"
+
 services:
   server:
     build:
       context: .
       dockerfile: server/Dockerfile
     image: weave-demo-server:latest
-    ports:
-      - "2567:2567"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV}
+      - PORT=${PORT}
+      - JWT_SECRET=${JWT_SECRET}
+      # Tip: if you start using Postgres in dev, add DATABASE_URL here too.
+      # - DATABASE_URL=${DATABASE_URL}
+    ports:
+      - "${PORT}:${PORT}"
 
   client:
     image: node:20-alpine
@@ -24,4 +30,4 @@ services:
     image: cloudflare/cloudflared:latest
     depends_on:
       - server
-    command: tunnel --protocol http2 --no-autoupdate --url http://server:2567
+    command: tunnel --protocol http2 --no-autoupdate --url http://server:${PORT}

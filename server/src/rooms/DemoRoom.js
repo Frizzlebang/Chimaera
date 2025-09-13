@@ -1,21 +1,18 @@
-// server/src/rooms/DemoRoom.js
-
-// Colyseus is CommonJS; import default and destructure
 import colyseusPkg from "colyseus";
 const { Room } = colyseusPkg;
-
 import { Schema, MapSchema } from "@colyseus/schema";
-import * as schema from "@colyseus/schema"; // for defineTypes in JS
+import * as schema from "@colyseus/schema";
+import { verifyJwt } from "../auth/jwt.js";
+import { pool } from "../db/pool.js";
+import { EventStore, applyEvent } from "../db/EventStore.js"; // your existing modules
 
-import { EventStore } from "../../db/EventStore.js";
-
-// ---------- Schema ----------
 class PlayerState extends Schema {}
 schema.defineTypes(PlayerState, {
   id: "string",
   name: "string",
   hp: "int16",
   xp: "int32",
+  role: "string" // 'owner'|'dm'|'player'|'viewer'
 });
 
 class DemoState extends Schema {
@@ -30,86 +27,152 @@ schema.defineTypes(DemoState, {
   version: "int32",
 });
 
-const SNAPSHOT_EVERY = 50;
-
-// ---------- Room ----------
 export class DemoRoom extends Room {
-  async onCreate() {
+  // IMPORTANT: create rooms using a campaign-bound id: `demo:<campaignId>`
+  static roomNameForCampaign(campaignId) {
+    return `demo:${campaignId}`;
+  }
+
+  async onCreate(options) {
     this.setState(new DemoState());
+    this.maxClients = 32;
 
-    // --- persistence bootstrap ---
-    this.store = new EventStore(this.roomId, "campaign");
-    await this.store.ensureStream();
+    // Load snapshot + events for this.campaignId
+    this.campaignId = options.campaignId;
+    this.roomKind = "demo";
 
-    // Load snapshot + events, rehydrate schema state
-    const { state, version } = await this.store.load();
-    for (const [id, p] of Object.entries(state.players || {})) {
-      const pl = new PlayerState();
-      pl.id = id;
-      pl.name = p.name ?? "";
-      pl.hp = p.hp ?? 10;
-      pl.xp = p.xp ?? 0;
-      this.state.players.set(id, pl);
+    this.onMessage("op", (client, payload) => this.handleOp(client, payload));
+    this.onMessage("chat", (client, payload) => this.handleChat(client, payload));
+  }
+
+  async onAuth(client, options, request) {
+    // Expect token in options.token
+    const token = options?.token;
+    if (!token) throw new Error("missing token");
+
+    const claims = verifyJwt(token);
+
+    // Per-campaign isolation: require the room’s campaign to match the token
+    if (!options.campaignId) throw new Error("missing campaignId");
+    if (claims.campaign_id !== options.campaignId) throw new Error("wrong campaign");
+
+    // Check membership from DB (server-side check, not just trust JWT)
+    const { rows } = await pool.query(
+      `select m.role
+         from membership m
+        where m.user_id = $1 and m.campaign_id = $2`,
+      [claims.sub, claims.campaign_id]
+    );
+    if (rows.length === 0) throw new Error("not a member");
+    const role = rows[0].role;
+
+    // Room ACL (optional hardening)
+    const { rows: acl } = await pool.query(
+      `select can_join_roles from room_acl where campaign_id=$1 and room_kind=$2`,
+      [claims.campaign_id, this.roomKind]
+    );
+    if (acl.length && !acl[0].can_join_roles.includes(role)) {
+      throw new Error("role not allowed in this room");
     }
-    this.state.version = version || 0;
 
-    // --- messages ---
-    this.onMessage("join", async (client, { name }) => {
-      const p = new PlayerState();
-      p.id = client.sessionId;
-      p.name = name || `Player ${client.sessionId.slice(0, 4)}`;
-      p.hp = 10;
-      p.xp = 0;
-      this.state.players.set(client.sessionId, p);
-      this.broadcast("info", `${p.name} joined`);
+    // Attach to client for later checks
+    client.user = {
+      id: claims.sub,
+      name: claims.name,
+      role,
+      campaignId: claims.campaign_id
+    };
+    return true;
+  }
 
-      const v = await this.store.append("PLAYER_JOIN", { id: client.sessionId, name });
-      if (v % SNAPSHOT_EVERY === 0) {
-        await this.store.saveSnapshot(v, serializeState(this.state));
-      }
-    });
-
-    this.onMessage("op", async (client, { kind, value }) => {
-      const p = this.state.players.get(client.sessionId);
-      if (!p) return;
-
-      const n = Number(value || 0);
-      if (kind === "hp_delta") p.hp = p.hp + n;
-      if (kind === "xp_delta") p.xp = p.xp + n;
-      this.state.version++;
-
-      const id = client.sessionId;
-      const type =
-        kind === "hp_delta" ? "HP_ADD" :
-        kind === "xp_delta" ? "XP_ADD" : null;
-
-      if (type) {
-        const v = await this.store.append(type, { id, amount: n });
-        if (v % SNAPSHOT_EVERY === 0) {
-          await this.store.saveSnapshot(v, serializeState(this.state));
-        }
-      }
-    });
+  async onJoin(client) {
+    // Add to state if not present
+    const uid = client.user.id;
+    if (!this.state.players.has(uid)) {
+      const ps = new PlayerState();
+      ps.id = uid;
+      ps.name = client.user.name;
+      ps.hp = 10; // default or from DB snapshot
+      ps.xp = 0;
+      ps.role = client.user.role;
+      this.state.players.set(uid, ps);
+    }
   }
 
   async onLeave(client) {
-    try {
-      this.state.players?.delete(client.sessionId);
-      const v = await this.store.append("PLAYER_LEAVE", { id: client.sessionId });
-      if (v % SNAPSHOT_EVERY === 0) {
-        await this.store.saveSnapshot(v, serializeState(this.state));
-      }
-    } catch (e) {
-      console.error("onLeave error:", e);
+    // keep players in state; persistence handled via EventStore
+  }
+
+  // ---- Server-side checks & ops ----
+
+  assertRole(client, allowed) {
+    if (!allowed.includes(client.user.role)) {
+      throw new Error(`forbidden: role ${client.user.role}`);
     }
   }
-}
 
-// ---------- helper ----------
-function serializeState(schemaState) {
-  const out = { players: {}, version: Number(schemaState.version || 0) };
-  for (const [id, p] of schemaState.players) {
-    out.players[id] = { id, name: p.name, hp: p.hp, xp: p.xp };
+  assertSameCampaign(client) {
+    if (client.user.campaignId !== this.campaignId) {
+      throw new Error("campaign mismatch");
+    }
   }
-  return out;
+
+  // Example op: adjust HP
+  async handleOp(client, payload) {
+    this.assertSameCampaign(client);
+
+    const { type, data } = payload ?? {};
+    switch (type) {
+      case "SET_HP": {
+        // Only DM/owner can set arbitrary HP; players can SET_HP only on self within bounds
+        if (client.user.role === "player") {
+          if (data.playerId !== client.user.id) throw new Error("players may only adjust self");
+          if (data.value < 0 || data.value > 30) throw new Error("out of bounds");
+        } else {
+          this.assertRole(client, ["owner","dm"]);
+        }
+
+        const event = { t: "SET_HP", by: client.user.id, pid: data.playerId, val: data.value };
+        // Persist first (event-sourced)
+        const eventStore = new EventStore(this.campaignId, 'campaign');
+        await eventStore.ensureStream();
+        await eventStore.append(event.t, event);
+
+        // Apply server-validated change
+        const ps = this.state.players.get(data.playerId);
+        if (!ps) throw new Error("player not found");
+        ps.hp = data.value;
+        this.state.version++;
+        break;
+      }
+
+      case "ADD_XP": {
+        // players can add XP to self (bounded), dm/owner to anyone
+        if (client.user.role === "player" && data.playerId !== client.user.id) {
+          throw new Error("players may only add XP to self");
+        }
+        if (data.amount < 0 || data.amount > 100) throw new Error("invalid xp");
+
+        const event = { t: "ADD_XP", by: client.user.id, pid: data.playerId, amt: data.amount };
+        const eventStore = new EventStore(this.campaignId, 'campaign');
+        await eventStore.ensureStream();
+        await eventStore.append(event.t, event);
+
+        const ps = this.state.players.get(data.playerId);
+        if (!ps) throw new Error("player not found");
+        ps.xp += data.amount;
+        this.state.version++;
+        break;
+      }
+
+      default:
+        throw new Error("unknown op");
+    }
+  }
+
+  handleChat(client, payload) {
+    this.assertSameCampaign(client);
+    const msg = String(payload?.text ?? "").slice(0, 500);
+    this.broadcast("chat", { from: client.user.name, text: msg });
+  }
 }
