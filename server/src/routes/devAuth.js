@@ -69,15 +69,19 @@ router.post("/dev/login", async (req, res) => {
     });
 
     // Always return campaignId, even if null
+    // After you build `campaign`
     const response = {
       token,
       user,
-      campaignId: campaign ? campaign.id : null, // Always return campaignId
+      campaignId: campaign ? campaign.id : null,
     };
 
-    // Only add campaign and membership if they exist
     if (campaign) {
-      response.campaign = campaign;
+      response.campaign = {
+        id: campaign.id,
+        slug: campaign.slug,
+        title: campaign.title,
+      };
       response.membership = { role: finalRole };
     }
 

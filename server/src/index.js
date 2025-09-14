@@ -24,7 +24,6 @@ import { initSchema } from "./db/index.js";
 import { DemoRoom } from "./rooms/DemoRoom.js";
 import devAuthRouter from "./routes/devAuth.js";
 
-
 // 1) Ensure DB schema exists
 await initSchema();
 
@@ -51,11 +50,11 @@ app.use(express.static(publicDir));
 app.get("/health", (_req, res) => res.send("ok"));
 app.get("*", (_req, res) => res.sendFile(path.join(publicDir, "index.html")));
 
-// 5) Colyseus + HTTP
+// 5) Colyseus + HTTP - CREATE gameServer FIRST
 const server = http.createServer(app);
 const gameServer = new Server({ server });
 
-// Per-campaign isolation: ensure 1 room "demo" per campaignId bucket
+// THEN define rooms - Per-campaign isolation: ensure 1 room "demo" per campaignId bucket
 gameServer
   .define("demo", DemoRoom)
   .filterBy(["campaignId"]);
