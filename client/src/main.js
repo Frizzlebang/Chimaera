@@ -1,4 +1,6 @@
 import * as Colyseus from 'colyseus.js'
+import { devLogin } from "./auth/devLogin";
+import { joinDemoRoom } from "./net/joinDemo";
 
 const wsUrl = 'ws://localhost:2567'
 const client = new Colyseus.Client(wsUrl)
@@ -23,6 +25,15 @@ function updateStatus(state, message) {
   }
 }
 
+(async () => {
+  // Only fetches a token if you don't already have one in localStorage
+  if (!localStorage.getItem("weave_token")) {
+    await devLogin({ email: "dev@example.com", name: "Dev", campaignSlug: "demo-campaign", role: "owner" });
+  }
+  room = await joinDemoRoom();
+  window.demoRoom = room; // handy for console poking
+})();
+
 async function login() {
   const name = document.getElementById('name').value || 'Player'
   const email = `${name.toLowerCase()}@example.com`
@@ -34,37 +45,48 @@ async function login() {
     body: JSON.stringify({ email, name, campaignSlug })
   })
   
-  const { token } = await response.json()
-  return { token }
+  const data = await response.json();
+  console.log('🔍 Login response:', data); // Debug log
+  
+  // Extract both token and campaignId from response
+  const token = data.token;
+  const campaignId = data.campaignId || data.campaign?.id;
+  
+  return { token, campaignId };
+}
+
+// JWT base64url-safe decode helper
+function decodeJwtPayload(token) {
+  const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+  const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+  return JSON.parse(atob(b64 + pad));
 }
 
 async function join() {
   try {
-    updateStatus('connecting', 'logging in...')
-    
-    const { token } = await login()
-    log('Login successful')
-    
-    updateStatus('connecting', 'joining room...')
-    
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    const campaignId = payload.campaign_id
-    log(`Campaign ID: ${campaignId}`)
-    
-    room = await client.joinOrCreate('demo', { 
-      token, 
-      campaignId 
-    })
-    
-    updateStatus('connected', 'connected')
-    log('Joined room successfully')
-    
-    setupRoomHandlers(payload)
-    
-  } catch (e) { 
-    console.error('Full error:', e)
-    updateStatus('error', 'error')
-    log('Join failed: ' + (e.message || 'Unknown error'))
+    updateStatus('connecting', 'logging in...');
+
+    const { token, campaignId } = await login();
+    log('Login successful');
+
+    updateStatus('connecting', 'joining room...');
+
+    if (!campaignId) throw new Error("missing campaignId from login");
+    log(`Campaign ID: ${campaignId}`);
+
+    // Fixed: Use the existing client and correct wsUrl
+    room = await client.joinOrCreate("demo", { token, campaignId });
+
+    updateStatus('connected', 'room joined');
+    log('Joined room successfully');
+
+    // Get user info from JWT for the handlers
+    const payload = decodeJwtPayload(token);
+    setupRoomHandlers(payload);
+  } catch (err) {
+    console.error("Join error:", err);
+    updateStatus('error', err.message);
+    log(`❌ Join error: ${err.message}`);
   }
 }
 

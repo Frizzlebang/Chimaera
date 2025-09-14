@@ -1,59 +1,90 @@
+// src/routes/devAuth.js
 import express from "express";
-import { signJwt } from "../auth/jwt.js";
-import { pool } from "../db/pool.js"; // your pg pool
+import { pool } from "../db/pool.js";
+import { signJwt } from "../auth/jwt.js"; // assumes you export signJwt({ sub, ... })
 
 const router = express.Router();
 
 /**
  * POST /api/dev/login
- * body: { email, name, campaignSlug }
- * returns: { token }
+ * body: { email: string, name?: string, campaignSlug?: string, role?: 'owner'|'dm'|'player'|'viewer' }
+ * returns: { token, user: { id, email, name }, campaign?: { id, slug, title }, membership?: { role } }
  */
 router.post("/dev/login", async (req, res) => {
-  const { email, name, campaignSlug } = req.body ?? {};
-  if (!email || !name || !campaignSlug) return res.status(400).json({error:"missing fields"});
+  const { email, name, campaignSlug, role } = req.body || {};
+
+  if (!email || typeof email !== "string") {
+    return res.status(400).json({ error: "email required" });
+  }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { rows: urows } = await client.query(
-      `insert into app_user (email, name)
-       values ($1,$2)
-       on conflict (email) do update set name=excluded.name
-       returning id`, [email, name]
-    );
-    const userId = urows[0].id;
 
-    const { rows: crows } = await client.query(
-      `insert into campaign (slug, title)
-       values ($1, initcap(replace($1,'-',' ')))
-       on conflict (slug) do update set title=campaign.title
-       returning id`, [campaignSlug]
+    // 1) Upsert user
+    const userQ = await client.query(
+      `INSERT INTO app_user (email, name)
+       VALUES ($1, COALESCE($2, split_part($1,'@',1)))
+       ON CONFLICT (email) DO UPDATE SET name = COALESCE(EXCLUDED.name, app_user.name)
+       RETURNING id, email, name`,
+      [email, name || null]
     );
-    const campaignId = crows[0].id;
+    const user = userQ.rows[0];
 
-    await client.query(
-      `insert into membership (user_id, campaign_id, role)
-       values ($1,$2,'owner')
-       on conflict do nothing`, [userId, campaignId]
-    );
+    let campaign = null;
+    let finalRole = role || "owner";
+
+    // 2) Optionally ensure campaign + membership
+    if (campaignSlug) {
+      const campQ = await client.query(
+        `INSERT INTO campaign (slug, title, created_by)
+         VALUES ($1, initcap(replace($1,'-',' ')), $2)
+         ON CONFLICT (slug) DO UPDATE SET title = EXCLUDED.title
+         RETURNING id, slug, title`,
+        [campaignSlug, user.id]
+      );
+      campaign = campQ.rows[0];
+
+      // default role safety
+      if (!["owner", "dm", "player", "viewer"].includes(finalRole)) {
+        finalRole = "owner";
+      }
+
+      await client.query(
+        `INSERT INTO membership (user_id, campaign_id, role)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, campaign_id) DO UPDATE SET role = GREATEST(membership.role::text, EXCLUDED.role::text)::campaign_role`,
+        [user.id, campaign.id, finalRole]
+      );
+    }
 
     await client.query("COMMIT");
 
+    // 3) Sign JWT (include campaign_id when present)
     const token = signJwt({
-      sub: userId,
-      email,
-      name,
-      campaign_id: campaignId,
-      campaign_slug: campaignSlug,
-      roles: ["owner"],
-      // room-level gating convenience
-      perms: { join_demo: true }
+      sub: user.id,
+      email: user.email,
+      name: user.name,
+      campaign_id: campaign ? campaign.id : null, // Changed from undefined to null
     });
-    res.json({ token });
+
+    // Always return campaignId, even if null
+    const response = {
+      token,
+      user,
+      campaignId: campaign ? campaign.id : null, // Always return campaignId
+    };
+
+    // Only add campaign and membership if they exist
+    if (campaign) {
+      response.campaign = campaign;
+      response.membership = { role: finalRole };
+    }
+
+    res.json(response);
   } catch (e) {
     await client.query("ROLLBACK");
-    res.status(500).json({error: e.message});
+    res.status(500).json({ error: e.message });
   } finally {
     client.release();
   }

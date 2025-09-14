@@ -41,6 +41,11 @@ export class DemoRoom extends Room {
     this.campaignId = options.campaignId;
     this.roomKind = "demo";
 
+    // S4 safety: campaignId is required to bind the room
+    if (!this.campaignId) {
+      throw new Error("missing campaignId");
+    }
+
     this.onMessage("op", (client, payload) => this.handleOp(client, payload));
     this.onMessage("chat", (client, payload) => this.handleChat(client, payload));
   }
@@ -55,6 +60,12 @@ export class DemoRoom extends Room {
     // Per-campaign isolation: require the room’s campaign to match the token
     if (!options.campaignId) throw new Error("missing campaignId");
     if (claims.campaign_id !== options.campaignId) throw new Error("wrong campaign");
+    
+    // If this room is already bound to a campaign, enforce consistency
+    if (this.campaignId && this.campaignId !== options.campaignId) {
+      throw new Error("room bound to different campaign");
+    }
+
 
     // Check membership from DB (server-side check, not just trust JWT)
     const { rows } = await pool.query(
@@ -86,6 +97,9 @@ export class DemoRoom extends Room {
   }
 
   async onJoin(client) {
+    // S4 safety: ensure joined client matches the room's campaign
+    this.assertSameCampaign(client);
+
     // Add to state if not present
     const uid = client.user.id;
     if (!this.state.players.has(uid)) {

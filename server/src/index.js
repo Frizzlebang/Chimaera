@@ -2,6 +2,7 @@
 import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pool } from "./db/pool.js";
 
 // Create __dirname in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -31,6 +32,15 @@ await initSchema();
 const app = express();
 app.set("trust proxy", 1);
 app.use(express.json());
+
+app.get("/api/health", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    res.json({ ok: true, db: "up", time: new Date().toISOString() });
+  } catch (e) {
+    res.status(500).json({ ok: false, db: "down", error: e.message });
+  }
+});
 
 // 3) API routes BEFORE static/catch-all
 app.use("/api", devAuthRouter);
