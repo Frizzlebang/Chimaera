@@ -18,3 +18,28 @@ export function verifyJwt(token) {
     audience: JWT_AUD,
   });
 }
+
+import { query } from "../db/index.js";
+
+/**
+ * Throws if the user is not an active member of the campaign.
+ * Expects a Membership table like:
+ *   membership(campaign_id uuid, user_id uuid, role text, is_active boolean default true, ...)
+ */
+export async function assertMember(campaignId, userId) {
+  if (!campaignId || !userId) throw new Error("missing campaign / user");
+
+  const { rows } = await query(
+    `select 1
+       from membership
+      where campaign_id = $1
+        and user_id = $2
+        and coalesce(is_active, true) = true
+      limit 1`,
+    [campaignId, userId]
+  );
+
+  if (rows.length === 0) {
+    throw new Error("membership required");
+  }
+}

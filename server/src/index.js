@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pool } from "./db/pool.js";
+import cors from "cors";
 
 // Create __dirname in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -24,13 +25,33 @@ import { initSchema } from "./db/index.js";
 import { DemoRoom } from "./rooms/DemoRoom.js";
 import devAuthRouter from "./routes/devAuth.js";
 
-// 1) Ensure DB schema exists
-await initSchema();
-
-// 2) Express
+// Express
 const app = express();
 app.set("trust proxy", 1);
 app.use(express.json());
+
+// allowedOrigins
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://weave.playweave.online",
+];
+
+// server CORS / allowed origins
+app.use(
+  cors({
+    origin(origin, cb) {
+      // allow non-browser tools (no Origin header) and known origins
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  })
+);
+
+// good practice for preflight
+app.options("*", cors());
+// Ensure DB schema exists
+await initSchema();
 
 app.get("/api/health", async (_req, res) => {
   try {
@@ -41,27 +62,24 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
-// 3) API routes BEFORE static/catch-all
+// API routes BEFORE static/catch-all
 app.use("/api", devAuthRouter);
 
-// 4) Static & SPA catch-all
+// Static & SPA catch-all (after /api routes)
 const publicDir = path.join(__dirname, "..", "public");
 app.use(express.static(publicDir));
-app.get("/health", (_req, res) => res.send("ok"));
+app.get("/health", (_req, res) => res.send("ok")); // optional simple check
 app.get("*", (_req, res) => res.sendFile(path.join(publicDir, "index.html")));
 
-// 5) Colyseus + HTTP - CREATE gameServer FIRST
-const server = http.createServer(app);
-const gameServer = new Server({ server });
+// Colyseus + HTTP
+const httpServer = http.createServer(app);
+const gameServer = new Server({ server: httpServer });
 
-// THEN define rooms - Per-campaign isolation: ensure 1 room "demo" per campaignId bucket
-gameServer
-  .define("demo", DemoRoom)
-  .filterBy(["campaignId"]);
+// Define rooms (per-campaign isolation)
+gameServer.define("demo", DemoRoom).filterBy(["campaignId"]);
 
-// 6) Listen
+// Listen
 const port = process.env.PORT || 2567;
-server.listen(port, () => {
-  console.log(`[weave-demo] listening on http://localhost:${port}`);
-  console.log(`[weave-demo] static served from ${publicDir}`);
+httpServer.listen(port, "0.0.0.0", () => {
+  console.log(`[server] listening on 0.0.0.0:${port}`);
 });

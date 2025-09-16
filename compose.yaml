@@ -35,7 +35,10 @@ services:
     image: cloudflare/cloudflared:latest
     depends_on:
       - server
-    command: tunnel --protocol http2 --no-autoupdate --url http://server:${PORT}
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+
 
 volumes:
   pgdata:

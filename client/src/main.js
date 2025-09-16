@@ -1,8 +1,23 @@
 import * as Colyseus from 'colyseus.js'
 
-// Same-origin WS works for localhost and tunnel
-const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host
-const client = new Colyseus.Client(WS_URL)
+// --- WS_URL config ---
+const HTTP_BASE = import.meta.env.VITE_HTTP_BASE || window.location.origin;
+const WS_BASE =
+  import.meta.env.VITE_WS_BASE ||
+  (HTTP_BASE.startsWith("https://")
+    ? "wss://" + HTTP_BASE.slice("https://".length)
+    : HTTP_BASE.replace(/^http/, "ws"));
+
+// --- begin: API helper ---
+const api = (path, init = {}) =>
+  fetch(`${HTTP_BASE}${path}`, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+    ...init,
+  });
+// --- end: API helper ---
+
+const client = new Colyseus.Client(WS_BASE);
 
 let room = null
 const statusEl = document.getElementById('status')
@@ -37,11 +52,11 @@ async function login(nameOverride) {
   const email = `${name.toLowerCase()}@example.com`;
   const campaignSlug = 'demo-campaign';
 
-  const response = await fetch('/api/dev/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, name, campaignSlug })
+  const response = await api('/api/dev/login', {
+  method: 'POST',
+  body: JSON.stringify({ email, name, campaignSlug }),
   });
+
 
   const data = await response.json();
   const token = data.token;
@@ -66,7 +81,7 @@ async function login(nameOverride) {
 
 async function join() {
   try {
-    updateStatus('connecting', 'logging in…');
+    updateStatus('connecting', 'logging in...');
 
     // If already connected, leave so we can switch identity
     if (room) {
@@ -77,7 +92,7 @@ async function join() {
     const { token, campaignId } = await login();
     log('Login successful');
 
-    updateStatus('connecting', 'joining room…');
+    updateStatus('connecting', 'joining room...');
 
     if (!campaignId) throw new Error("missing campaignId from login");
     log(`Campaign ID: ${campaignId}`);
@@ -94,7 +109,7 @@ async function join() {
   } catch (err) {
     console.error("Join error:", err);
     updateStatus('error', err.message || String(err));
-    log(`❌ Join error: ${err.message || String(err)}`);
+    log(`Join error: ${err.message || String(err)}`);
   }
 }
 
@@ -123,33 +138,29 @@ function setupRoomHandlers(payload) {
     }
   })
 
-  document.querySelectorAll('[data-kind]').forEach(btn => {
-    btn.onclick = () => {
-      if (!room) return
-      const kind = btn.dataset.kind
-      const value = parseInt(btn.dataset.val, 10)
-      
-      if (kind === 'hp') {
-        // Keep sending SET_HP (server converts to HP_ADD for persistence)
-        const currentPlayer = Array.from(room.state.players.values()).find(p => p.id === payload.sub)
-        const currentHP = currentPlayer ? currentPlayer.hp : 10
-        const newHP = Math.max(0, currentHP + value)
-        
-        room.send('op', { 
-          type: 'SET_HP', 
-          data: { playerId: payload.sub, value: newHP } 
-        })
-      } else if (kind === 'xp') {
-        // Keep sending ADD_XP (server converts to XP_ADD)
-        room.send('op', { 
-          type: 'ADD_XP', 
-          data: { playerId: payload.sub, amount: value } 
-        })
-      }
-      
-      log(`Sent ${kind.toUpperCase()} ${value > 0 ? '+' : ''}${value}`)
+document.querySelectorAll('[data-kind]').forEach(btn => {
+  btn.onclick = () => {
+    if (!room) return
+    const kind = btn.dataset.kind
+    const value = parseInt(btn.dataset.val, 10)
+    
+    if (kind === 'hp') {
+      // Send HP_ADD directly - server expects { type, amount }
+      room.send('op', { 
+        type: 'HP_ADD', 
+        amount: value  // Remove the 'data' wrapper
+      })
+    } else if (kind === 'xp') {
+      // Send XP_ADD directly - server expects { type, amount }
+      room.send('op', { 
+        type: 'XP_ADD', 
+        amount: value  // Remove the 'data' wrapper
+      })
     }
-  })
+    
+    log(`Sent ${kind.toUpperCase()} ${value > 0 ? '+' : ''}${value}`)
+  }
+})
 }
 
 joinBtn.onclick = join

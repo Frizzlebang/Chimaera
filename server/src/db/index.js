@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+export { assertMember } from "../auth/jwt.js";
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL

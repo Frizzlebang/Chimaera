@@ -1,42 +1,36 @@
-// server/db/EventStore.js (ESM)
+// server/src/db/EventStore.js
 import { query } from "./index.js";
 import { randomUUID } from "node:crypto";
 
 /**
- * JSON reducer that mirrors your DemoState
- * state = { players: { [id]: { id, name, hp, xp } }, version: number }
+ * JSON reducer that mirrors DemoState.
+ * state = { players: { [id]: { id, name, hp, xp, role } }, version: number }
  */
 export function applyEvent(state, type, payload) {
   state.players ??= {};
   state.version = (state.version || 0) + 1;
 
   switch (type) {
-    case "PLAYER_JOIN": {
+    case "PLAYER_UPSERT": {
+      const { id, name, role } = payload;
+      state.players[id] = state.players[id] ?? { id, name: "", hp: 10, xp: 0, role: "player" };
+      if (name !== undefined) state.players[id].name = name;
+      if (role !== undefined) state.players[id].role = role;
+      return;
+    }
+    case "NAME_SET": {
       const { id, name } = payload;
-      state.players[id] = state.players[id] ?? { id, name: name || "", hp: 10, xp: 0 };
+      if (state.players[id]) state.players[id].name = name || "";
       return;
     }
-    case "PLAYER_LEAVE": {
-      const { id } = payload;
-      delete state.players[id];
-      return;
-    }
-    case "SET_NAME": {
-      const { id, name } = payload;
-      state.players[id] = state.players[id] ?? { id, name: "", hp: 10, xp: 0 };
-      state.players[id].name = name || "";
-      return;
-    }
-    case "HP_ADD": {
-      const { id, amount } = payload;
-      state.players[id] = state.players[id] ?? { id, name: "", hp: 10, xp: 0 };
-      state.players[id].hp = (state.players[id].hp || 0) + Number(amount || 0);
+    case "HP_SET": {
+      const { id, hp } = payload;
+      if (state.players[id]) state.players[id].hp = Number(hp || 0);
       return;
     }
     case "XP_ADD": {
       const { id, amount } = payload;
-      state.players[id] = state.players[id] ?? { id, name: "", hp: 10, xp: 0 };
-      state.players[id].xp = (state.players[id].xp || 0) + Number(amount || 0);
+      if (state.players[id]) state.players[id].xp += Number(amount || 0);
       return;
     }
     default:
@@ -46,7 +40,7 @@ export function applyEvent(state, type, payload) {
 
 export class EventStore {
   constructor(streamId, streamType = "campaign") {
-    this.streamId = streamId;      // e.g., your room/campaign id (uuid)
+    this.streamId = streamId;      // e.g., campaign/room id
     this.streamType = streamType;  // just a label
   }
 
@@ -68,18 +62,23 @@ export class EventStore {
     return Number(rows[0].v);
   }
 
-  async append(type, payload) {
+  async append(type, payload, opts = {}) {
+    await this.ensureStream();
     const next = (await this.headVersion()) + 1;
+
+    const correlationId = opts.correlationId || randomUUID();
+
     await query(
-      `INSERT INTO events(event_id, stream_id, version, type, payload)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [randomUUID(), this.streamId, next, type, payload]
+      `INSERT INTO events(event_id, stream_id, version, type, payload, correlation_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [randomUUID(), this.streamId, next, type, payload, correlationId]
     );
+
     return next;
   }
 
   async load() {
-    // try snapshot
+    // load latest snapshot
     const snap = await query(
       `SELECT version, state
          FROM snapshots
@@ -117,7 +116,11 @@ export class EventStore {
   async saveSnapshot(version, state) {
     await query(
       `INSERT INTO snapshots(snapshot_id, stream_id, version, state)
-       VALUES ($1, $2, $3, $4)`,
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (stream_id) DO UPDATE
+         SET version = EXCLUDED.version,
+             state = EXCLUDED.state,
+             created_at = now()`,
       [randomUUID(), this.streamId, version, state]
     );
   }
