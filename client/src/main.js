@@ -19,58 +19,71 @@ const api = (path, init = {}) =>
 
 const client = new Colyseus.Client(WS_BASE);
 
-let room = null
-const statusEl = document.getElementById('status')
-const statusDot = document.getElementById('statusDot')
-const joinBtn = document.getElementById('joinBtn')
-const logEl = document.getElementById('log')
+let room = null;
+let desiredName = "";
 
-function log(m) { 
-  logEl.innerHTML += m + '<br/>' 
-  logEl.scrollTop = logEl.scrollHeight 
+// UI refs
+const statusEl = document.getElementById('status');
+const statusDot = document.getElementById('statusDot');
+const joinBtn   = document.getElementById('joinBtn');
+const logEl     = document.getElementById('log');
+const nameInput = document.getElementById('name');
+
+function log(m) {
+  if (!logEl) return;
+  logEl.innerHTML += m + '<br/>';
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
 function updateStatus(state, message) {
-  if (statusEl) statusEl.textContent = message || state
+  if (statusEl) statusEl.textContent = message || state;
   if (statusDot) {
-    statusDot.className = 'status-dot'
-    if (state === 'connected') statusDot.classList.add('connected')
-    else if (state === 'error') statusDot.classList.add('error')
+    statusDot.className = 'status-dot';
+    if (state === 'connected') statusDot.classList.add('connected');
+    else if (state === 'error') statusDot.classList.add('error');
   }
 }
 
-// JWT base64url-safe decode helper
+// Robust JWT base64url decode
 function decodeJwtPayload(token) {
-  const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-  const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
-  return JSON.parse(atob(b64 + pad));
+  try {
+    const b64 = (token.split(".")[1] || "").replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+    return JSON.parse(atob(b64 + pad));
+  } catch {
+    return {};
+  }
 }
 
-// Login using the name in the input (or override)
+// Dev login using current name (or override)
 async function login(nameOverride) {
-  const name = (nameOverride || document.getElementById('name').value || 'Player').trim();
+  const name = (nameOverride ?? nameInput?.value ?? 'Player').trim() || 'Player';
   const email = `${name.toLowerCase()}@example.com`;
   const campaignSlug = 'demo-campaign';
 
   const response = await api('/api/dev/login', {
-  method: 'POST',
-  body: JSON.stringify({ email, name, campaignSlug }),
+    method: 'POST',
+    body: JSON.stringify({ email, name, campaignSlug, role: 'player' }),
   });
 
-
-  const data = await response.json();
-  const token = data.token;
-
-  // Prefer API campaignId; fallback to JWT claim if needed
-  let campaignId = data.campaignId || data.campaign?.id;
-  if (!campaignId && token) {
-    try {
-      const payload = decodeJwtPayload(token);
-      campaignId = payload?.campaign_id || null;
-    } catch (e) {
-      console.warn("Could not decode JWT for campaign_id fallback:", e);
-    }
+  // Try to parse body even on non-OK to show useful error
+  let data = {};
+  try { data = await response.json(); } catch {}
+  if (!response.ok) {
+    const msg = data?.error || `dev/login ${response.status}`;
+    throw new Error(msg);
   }
+
+  const token = data.token;
+  // Accept both casing and fallback to JWT if not present in body
+  const payload = token ? decodeJwtPayload(token) : {};
+  const campaignId =
+      data.campaignId ||
+      data.campaign_id ||
+      data.campaign?.id ||
+      payload.campaignId ||
+      payload.campaign_id ||
+      null;
 
   // cache for convenience (optional)
   if (token) localStorage.setItem("weave_token", token);
@@ -83,29 +96,29 @@ async function join() {
   try {
     updateStatus('connecting', 'logging in...');
 
-    // If already connected, leave so we can switch identity
+    // Ensure we read the intended name before login
+    desiredName = (nameInput?.value ?? '').trim();
+
+    // If already connected, leave so we can switch identity cleanly
     if (room) {
       try { await room.leave(true); } catch {}
       room = null;
     }
 
-    const { token, campaignId } = await login();
+    const { token, campaignId } = await login(desiredName || undefined);
     log('Login successful');
-
-    updateStatus('connecting', 'joining room...');
 
     if (!campaignId) throw new Error("missing campaignId from login");
     log(`Campaign ID: ${campaignId}`);
+    updateStatus('connecting', 'joining room...');
 
-    // Join campaign-scoped room with fresh identity
     room = await client.joinOrCreate("demo", { token, campaignId });
+
+    // wire room handlers (includes reliable post-join name set)
+    setupRoomHandlers(token);
 
     updateStatus('connected', 'room joined');
     log('Joined room successfully');
-
-    // Get user info from JWT for the handlers
-    const payload = decodeJwtPayload(token);
-    setupRoomHandlers(payload);
   } catch (err) {
     console.error("Join error:", err);
     updateStatus('error', err.message || String(err));
@@ -113,54 +126,59 @@ async function join() {
   }
 }
 
-function setupRoomHandlers(payload) {
+function setupRoomHandlers(token) {
+  // Safety: drop previous listeners (if any)
+  room.removeAllListeners?.();
+
+  // Show version & render on patches
   room.onStateChange((state) => {
-    const tbody = document.querySelector('#players tbody')
-    tbody.innerHTML = ''
+    const versionEl = document.getElementById('version');
+    if (versionEl) versionEl.textContent = `Version: ${state.version}`;
 
-    // Show version (persistence proof)
-    const versionEl = document.getElementById('version')
-    if (versionEl) versionEl.textContent = `Version: ${state.version}`
+    const tbody = document.querySelector('#players tbody');
+    if (!tbody) return;
 
+    tbody.innerHTML = '';
     if (state.players.size === 0) {
-      tbody.innerHTML = '<tr class="empty-state"><td colspan="4">No players connected</td></tr>'
-    } else {
-      for (const [id, p] of state.players) {
-        const tr = document.createElement('tr')
-        tr.innerHTML = `
-          <td>${p.name}</td>
-          <td>${p.hp}</td>
-          <td>${p.xp}</td>
-          <td><span class="role-badge role-${p.role}">${p.role}</span></td>
-        `
-        tbody.appendChild(tr)
-      }
+      tbody.innerHTML = '<tr class="empty-state"><td colspan="4">No players connected</td></tr>';
+      return;
     }
-  })
+    for (const [id, p] of state.players) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${p.name}</td>
+        <td>${p.hp}</td>
+        <td>${p.xp}</td>
+        <td><span class="role-badge role-${p.role}">${p.role}</span></td>
+      `;
+      tbody.appendChild(tr);
+    }
+  });
 
-document.querySelectorAll('[data-kind]').forEach(btn => {
-  btn.onclick = () => {
-    if (!room) return
-    const kind = btn.dataset.kind
-    const value = parseInt(btn.dataset.val, 10)
-    
-    if (kind === 'hp') {
-      // Send HP_ADD directly - server expects { type, amount }
-      room.send('op', { 
-        type: 'HP_ADD', 
-        amount: value  // Remove the 'data' wrapper
-      })
-    } else if (kind === 'xp') {
-      // Send XP_ADD directly - server expects { type, amount }
-      room.send('op', { 
-        type: 'XP_ADD', 
-        amount: value  // Remove the 'data' wrapper
-      })
+  // After the FIRST patch, reliably set our desired name (if any)
+  room.onStateChange.once((state) => {
+    const nameToSet = (desiredName || '').trim();
+    if (nameToSet) {
+      room.send('op', { type: 'SET_NAME', name: nameToSet });
+      log(`Sent name: ${nameToSet}`);
     }
-    
-    log(`Sent ${kind.toUpperCase()} ${value > 0 ? '+' : ''}${value}`)
-  }
-})
+  });
+
+  // HP / XP buttons
+  document.querySelectorAll('[data-kind]').forEach((btn) => {
+    btn.onclick = () => {
+      if (!room) return;
+      const kind = btn.dataset.kind;
+      const value = parseInt(btn.dataset.val, 10);
+
+      if (kind === 'hp') {
+        room.send('op', { type: 'HP_ADD', amount: value });
+      } else if (kind === 'xp') {
+        room.send('op', { type: 'XP_ADD', amount: value });
+      }
+      log(`Sent ${kind.toUpperCase()} ${value > 0 ? '+' : ''}${value}`);
+    };
+  });
 }
 
-joinBtn.onclick = join
+joinBtn.onclick = join;

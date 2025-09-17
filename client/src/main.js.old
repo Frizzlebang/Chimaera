@@ -1,0 +1,265 @@
+// client/src/main.js
+import { Client } from "colyseus.js";
+
+// Correct WS auto-select: localhost -> 2567, prod -> same-origin
+const WS_URL =
+  location.hostname === "localhost"
+    ? "ws://localhost:2567"
+    : location.origin.replace(/^http/, "ws");
+const client = new Client(WS_URL);
+
+let room = null;
+let connected = false;
+let desiredName = "";
+
+/** =========================
+ *  Logging & status helpers
+ *  ========================= */
+const logEl = ensure("#log", () => {
+  const t = document.createElement("textarea");
+  t.id = "log";
+  t.rows = 10;
+  t.style.width = "100%";
+  t.readOnly = true;
+  document.body.appendChild(t);
+  return t;
+});
+function log(msg) {
+  logEl.value += (logEl.value ? "\n" : "") + msg;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function updateStatus(text, kind = "ok") {
+  const el = ensure("#status", () => {
+    const d = document.createElement("div");
+    d.id = "status";
+    d.style.position = "fixed";
+    d.style.bottom = "12px";
+    d.style.right = "12px";
+    d.style.padding = "6px 10px";
+    d.style.borderRadius = "8px";
+    d.style.boxShadow = "0 2px 8px rgba(0,0,0,0.15)";
+    d.style.background = "rgba(0,0,0,0.7)";
+    d.style.color = "white";
+    d.style.font = "12px system-ui, sans-serif";
+    d.textContent = "disconnected";
+    document.body.appendChild(d);
+    return d;
+  });
+  el.textContent = text;
+  el.dataset.kind = kind;
+}
+
+/** =========================
+ *  Dev login fallback
+ *  ========================= */
+async function login() {
+  const res = await fetch("/api/dev/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: "dev@example.com",
+      name: "Dev",
+      campaignSlug: "demo-campaign",
+      role: "player",
+    }),
+  });
+  if (!res.ok) throw new Error(`login failed: ${res.status}`);
+  return await res.json();
+}
+
+/** =========================
+ *  Join flow
+ *  ========================= */
+async function join() {
+  try {
+    setControlsEnabled(false);
+    updateStatus("connecting...", "warn");
+
+    if (room) {
+      try { await room.leave(true); } catch {}
+      room = null;
+    }
+
+    const res = await login();
+    const token = res.token;
+    const campaignId = res.campaignId || null;
+    if (!campaignId) throw new Error("missing campaignId");
+    log("Login successful");
+    log(`Campaign ID: ${campaignId}`);
+
+    room = await client.joinOrCreate("demo", { token, campaignId });
+    wireRoomHandlers();
+
+    updateStatus("connected", "ok");
+    connected = true;
+    setControlsEnabled(true);
+    log("Joined room successfully");
+  } catch (err) {
+    console.error("Join error:", err);
+    updateStatus("error", "err");
+    setControlsEnabled(false);
+    log("Join error: " + String(err?.message || err));
+  }
+}
+
+/** =========================
+ *  Room handlers & rendering
+ *  ========================= */
+function wireRoomHandlers() {
+  // Safety: clear any previous listeners
+  room.removeAllListeners();
+
+  room.onError((code, message) => {
+    log(`Room error: ${code} ${message || ""}`); // surfaces server-side errors
+  });
+  room.onLeave((code) => {
+    connected = false;
+    setControlsEnabled(false);
+    updateStatus(`left (${code})`, "warn");
+  });
+
+  const versionEl = ensure("#version", () => {
+    const s = document.createElement("div");
+    s.id = "version";
+    s.textContent = "Version: 0";
+    document.body.appendChild(s);
+    return s;
+  });
+
+  // Persistence meta (from server)
+  room.onMessage("meta", (m) => {
+    const v = Number(m?.persistedVersion || 0);
+    const snap = Number(m?.snapshotVersion || 0);
+    versionEl.textContent = `Version: ${v}`;
+    updateStatus(`Synced • v${v}${snap ? ` (snap @ v${snap})` : ""}`, "ok");
+  });
+
+  // First patch -> render and (if requested) set name
+  room.onStateChange.once((state) => {
+    versionEl.textContent = `Version: ${state.version}`;
+    render(state);
+
+    const name = (desiredName || "").trim();
+    if (name) {
+      // Now that we’re fully joined & state arrived, set name reliably
+      sendOp({ type: "SET_NAME", name });
+    }
+  });
+
+  // Subsequent patches
+  room.onStateChange((state) => {
+    render(state);
+    versionEl.textContent = `Version: ${state.version}`;
+  });
+}
+
+function render(state) {
+  const tbody = ensurePlayersTable();
+  tbody.innerHTML = "";
+
+  if (state.players.size === 0) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 4;
+    td.textContent = "No players connected";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+
+  state.players.forEach((p) => {
+    const tr = document.createElement("tr");
+    tr.appendChild(tdEl(p.name));
+    tr.appendChild(tdEl(p.hp));
+    tr.appendChild(tdEl(p.xp));
+    tr.appendChild(tdEl(p.role));
+    tbody.appendChild(tr);
+  });
+}
+
+function ensurePlayersTable() {
+  let table = document.getElementById("players");
+  if (!table) {
+    table = document.createElement("table");
+    table.id = "players";
+    table.style.width = "100%";
+    table.innerHTML = `
+      <thead>
+        <tr><th>Name</th><th>HP</th><th>XP</th><th>Role</th></tr>
+      </thead>
+      <tbody></tbody>`;
+    document.body.appendChild(table);
+  }
+  return table.querySelector("tbody");
+}
+
+function tdEl(text) {
+  const td = document.createElement("td");
+  td.textContent = String(text ?? "");
+  return td;
+}
+
+/** =========================
+ *  UI controls
+ *  ========================= */
+const nameInput = ensure("#nameInput", () => {
+  const i = document.createElement("input");
+  i.id = "nameInput";
+  i.placeholder = "Your name";
+  document.body.prepend(i);
+  return i;
+});
+const joinBtn = ensureBtn("#joinBtn", "Join Room");
+const hpMinusBtn = ensureBtn("#btnHpMinus", "-1 HP");
+const hpPlusBtn = ensureBtn("#btnHpPlus", "+1 HP");
+const xpPlusBtn = ensureBtn("#btnXpPlus", "+5 XP");
+
+joinBtn.addEventListener("click", () => {
+  desiredName = nameInput.value || "";
+  join();
+});
+hpMinusBtn.addEventListener("click", () => sendOp({ type: "HP_ADD", amount: -1 }));
+hpPlusBtn.addEventListener("click", () => sendOp({ type: "HP_ADD", amount: 1 }));
+xpPlusBtn.addEventListener("click", () => sendOp({ type: "XP_ADD", amount: 5 }));
+
+function setControlsEnabled(on) {
+  [joinBtn, hpMinusBtn, hpPlusBtn, xpPlusBtn].forEach((b) => {
+    b.disabled = !on && b !== joinBtn;
+  });
+}
+
+function sendOp(payload) {
+  if (!room || !connected) {
+    log("Not connected yet");
+    return;
+  }
+  try {
+    if ("amount" in payload) payload.amount = Number(payload.amount);
+    room.send("op", payload);
+    log(`Sent op: ${JSON.stringify(payload)}`);
+  } catch (e) {
+    console.error(e);
+    log("Send failed: " + String(e?.message || e));
+  }
+}
+
+/** =========================
+ *  Tiny DOM helpers
+ *  ========================= */
+function ensure(selector, factory) {
+  const el = document.querySelector(selector);
+  if (el) return el;
+  return factory();
+}
+function ensureBtn(sel, label) {
+  return ensure(sel, () => {
+    const b = document.createElement("button");
+    b.id = sel.replace(/^#/, "");
+    b.textContent = label;
+    document.body.prepend(b);
+    return b;
+  });
+}
+
+setControlsEnabled(false);
+updateStatus("disconnected", "warn");
