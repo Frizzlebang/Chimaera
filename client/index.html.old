@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Keep your CSP; if you later add style-src, include 'self' -->
+    <meta http-equiv="Content-Security-Policy"
+      content="script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; object-src 'none';">
+    <title>WEAVE demo (Vite)</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">WEAVE Demo</div>
+      <div id="connDot" class="dot dot--logged_out" title="connection state"></div>
+    </header>
+
+    <main class="container">
+      <!-- Auth / Join Panel -->
+      <section class="card" id="authCard">
+        <h2>Join Room</h2>
+        <div id="sessionBanner" class="banner hidden"></div>
+
+        <form id="joinForm" autocomplete="off">
+          <div class="grid grid-2">
+            <label>
+              <span>Email</span>
+              <input id="email" type="email" required placeholder="dev@example.com" />
+            </label>
+
+            <label>
+              <span>Name</span>
+              <input id="name" type="text" required placeholder="Dev" />
+            </label>
+
+            <label>
+              <span>Campaign Slug</span>
+              <input id="campaignSlug" type="text" required placeholder="demo-campaign" />
+            </label>
+
+            <label>
+              <span>Role</span>
+              <select id="role" required>
+                <option value="owner">owner</option>
+                <option value="player">player</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="row actions">
+            <button id="joinBtn" type="submit" class="btn btn-primary">Join Room</button>
+            <button id="logoutBtn" type="button" class="btn btn-ghost">Logout</button>
+          </div>
+          <div id="authInfo" class="muted small"></div>
+        </form>
+      </section>
+
+      <!-- Controls -->
+      <section class="card" id="controlsCard">
+        <h2>Self Controls</h2>
+        <div class="row">
+          <button class="op" data-kind="hp" data-val="-1">HP -1</button>
+          <button class="op" data-kind="hp" data-val="+1">HP +1</button>
+          <span class="sep"></span>
+          <button class="op" data-kind="xp" data-val="+1">XP +1</button>
+          <button class="op" data-kind="xp" data-val="+5">XP +5</button>
+        </div>
+        <div id="log" class="log"></div>
+      </section>
+
+      <!-- Roster -->
+      <section class="card">
+        <h2>Players</h2>
+        <table id="players">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>HP</th>
+              <th>XP</th>
+              <th>Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="empty-state"><td colspan="4">No players connected</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

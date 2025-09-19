@@ -19,13 +19,16 @@ CREATE TABLE IF NOT EXISTS app_user (
 );
 
 CREATE TABLE IF NOT EXISTS campaign (
-  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  slug       text UNIQUE NOT NULL,
-  title      text NOT NULL,
-  created_by uuid  -- <- This was missing!
+  id    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug  text UNIQUE NOT NULL,
+  title text NOT NULL
 );
 
--- Add FK only if missing (idempotent)
+-- 🔧 ensure column exists even if campaign table pre-dates it
+ALTER TABLE campaign
+  ADD COLUMN IF NOT EXISTS created_by uuid;
+
+-- FK for campaign.created_by (guarded)
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -103,7 +106,8 @@ END$$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS events_stream_version_uidx ON events(stream_id, version);
 CREATE INDEX IF NOT EXISTS idx_events_stream_version ON events(stream_id, version);
-CREATE INDEX IF NOT EXISTS ix_events_correlation ON events(correlation_id);
+-- leave correlation index to a later migration to avoid duplication:
+-- CREATE INDEX IF NOT EXISTS ix_events_correlation ON events(correlation_id);
 
 CREATE TABLE IF NOT EXISTS snapshots (
   snapshot_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -133,9 +137,9 @@ CREATE INDEX IF NOT EXISTS snapshots_stream_version_idx ON snapshots(stream_id, 
 -- Optional ACL table
 CREATE TABLE IF NOT EXISTS room_acl (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  campaign_id   uuid NOT NULL REFERENCES campaign(id),
-  room_kind     text NOT NULL,
+  campaign_id    uuid NOT NULL REFERENCES campaign(id),
+  room_kind      text NOT NULL,
   can_join_roles campaign_role[] NOT NULL,
-  created_at    timestamptz DEFAULT now(),
+  created_at     timestamptz DEFAULT now(),
   UNIQUE (campaign_id, room_kind)
 );

@@ -60,16 +60,22 @@ router.post("/dev/login", async (req, res) => {
 
     await client.query("COMMIT");
 
-    // 3) Sign JWT (include campaign_id when present)
-    const token = signJwt({
+    // 3) Sign JWT (include role and campaign_id when present)
+    const jwtPayload = {
       sub: user.id,
       email: user.email,
       name: user.name,
-      campaign_id: campaign ? campaign.id : null, // Changed from undefined to null
-    });
+      campaign_id: campaign ? campaign.id : null,
+    };
+
+    // Add role to JWT payload if we have a campaign
+    if (campaign) {
+      jwtPayload.role = finalRole;
+    }
+
+    const token = signJwt(jwtPayload);
 
     // Always return campaignId, even if null
-    // After you build `campaign`
     const response = {
       token,
       user,

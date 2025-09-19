@@ -1,184 +1,249 @@
-import * as Colyseus from 'colyseus.js'
+import { devLogin } from "./auth/devLogin.js";
+import {
+  getAuth, setAuth, getCampaign, setCampaign,
+  getToken, isTokenExpired, clearAll
+} from "./auth/token.js";
+import { joinDemoRoom } from "./net/joinDemo.js";
 
-// --- WS_URL config ---
-const HTTP_BASE = import.meta.env.VITE_HTTP_BASE || window.location.origin;
-const WS_BASE =
-  import.meta.env.VITE_WS_BASE ||
-  (HTTP_BASE.startsWith("https://")
-    ? "wss://" + HTTP_BASE.slice("https://".length)
-    : HTTP_BASE.replace(/^http/, "ws"));
+// ------- DOM -------
+const form = document.getElementById("joinForm");
+const emailEl = document.getElementById("email");
+const nameEl = document.getElementById("name");
+const slugEl = document.getElementById("campaignSlug");
+const roleEl = document.getElementById("role");
+const joinBtn = document.getElementById("joinBtn");
+const logoutBtn = document.getElementById("logoutBtn");
+const banner = document.getElementById("sessionBanner");
+const authInfo = document.getElementById("authInfo");
+const connDot = document.getElementById("connDot");
+const playersTable = document.getElementById("players").querySelector("tbody");
+const logBox = document.getElementById("log");
 
-// --- begin: API helper ---
-const api = (path, init = {}) =>
-  fetch(`${HTTP_BASE}${path}`, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(init.headers || {}) },
-    ...init,
-  });
-// --- end: API helper ---
-
-const client = new Colyseus.Client(WS_BASE);
+// ------- State machine -------
+const STATE = {
+  LOGGED_OUT: "logged_out",
+  LOGGING_IN: "logging_in",
+  AUTHENTICATED: "authd",
+  CAMPAIGN_SELECTED: "campaign_selected",
+  ROOM_CONNECTED: "connected",
+  EXPIRED: "expired",
+};
 
 let room = null;
-let desiredName = "";
 
-// UI refs
-const statusEl = document.getElementById('status');
-const statusDot = document.getElementById('statusDot');
-const joinBtn   = document.getElementById('joinBtn');
-const logEl     = document.getElementById('log');
-const nameInput = document.getElementById('name');
-
-function log(m) {
-  if (!logEl) return;
-  logEl.innerHTML += m + '<br/>';
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-function updateStatus(state, message) {
-  if (statusEl) statusEl.textContent = message || state;
-  if (statusDot) {
-    statusDot.className = 'status-dot';
-    if (state === 'connected') statusDot.classList.add('connected');
-    else if (state === 'error') statusDot.classList.add('error');
-  }
-}
-
-// Robust JWT base64url decode
-function decodeJwtPayload(token) {
-  try {
-    const b64 = (token.split(".")[1] || "").replace(/-/g, "+").replace(/_/g, "/");
-    const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
-    return JSON.parse(atob(b64 + pad));
-  } catch {
-    return {};
-  }
-}
-
-// Dev login using current name (or override)
-async function login(nameOverride) {
-  const name = (nameOverride ?? nameInput?.value ?? 'Player').trim() || 'Player';
-  const email = `${name.toLowerCase()}@example.com`;
-  const campaignSlug = 'demo-campaign';
-
-  const response = await api('/api/dev/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, name, campaignSlug, role: 'player' }),
-  });
-
-  // Try to parse body even on non-OK to show useful error
-  let data = {};
-  try { data = await response.json(); } catch {}
-  if (!response.ok) {
-    const msg = data?.error || `dev/login ${response.status}`;
-    throw new Error(msg);
-  }
-
-  const token = data.token;
-  // Accept both casing and fallback to JWT if not present in body
-  const payload = token ? decodeJwtPayload(token) : {};
-  const campaignId =
-      data.campaignId ||
-      data.campaign_id ||
-      data.campaign?.id ||
-      payload.campaignId ||
-      payload.campaign_id ||
-      null;
-
-  // cache for convenience (optional)
-  if (token) localStorage.setItem("weave_token", token);
-  if (campaignId) localStorage.setItem("weave_campaignId", campaignId);
-
-  return { token, campaignId };
-}
-
-async function join() {
-  try {
-    updateStatus('connecting', 'logging in...');
-
-    // Ensure we read the intended name before login
-    desiredName = (nameInput?.value ?? '').trim();
-
-    // If already connected, leave so we can switch identity cleanly
-    if (room) {
-      try { await room.leave(true); } catch {}
-      room = null;
+function setDot(state) {
+  connDot.className = "status dot--" + state;
+  
+  // Update the status text as well
+  const statusText = connDot.querySelector('.status-text');
+  if (statusText) {
+    switch(state) {
+      case STATE.LOGGED_OUT:
+        statusText.textContent = 'disconnected';
+        break;
+      case STATE.LOGGING_IN:
+        statusText.textContent = 'connecting';
+        break;
+      case STATE.AUTHENTICATED:
+        statusText.textContent = 'authenticated';
+        break;
+      case STATE.CAMPAIGN_SELECTED:
+        statusText.textContent = 'ready';
+        break;
+      case STATE.ROOM_CONNECTED:
+        statusText.textContent = 'connected';
+        break;
+      case STATE.EXPIRED:
+        statusText.textContent = 'expired';
+        break;
+      default:
+        statusText.textContent = 'unknown';
     }
-
-    const { token, campaignId } = await login(desiredName || undefined);
-    log('Login successful');
-
-    if (!campaignId) throw new Error("missing campaignId from login");
-    log(`Campaign ID: ${campaignId}`);
-    updateStatus('connecting', 'joining room...');
-
-    room = await client.joinOrCreate("demo", { token, campaignId });
-
-    // wire room handlers (includes reliable post-join name set)
-    setupRoomHandlers(token);
-
-    updateStatus('connected', 'room joined');
-    log('Joined room successfully');
-  } catch (err) {
-    console.error("Join error:", err);
-    updateStatus('error', err.message || String(err));
-    log(`Join error: ${err.message || String(err)}`);
   }
 }
 
-function setupRoomHandlers(token) {
-  // Safety: drop previous listeners (if any)
-  room.removeAllListeners?.();
+function setBanner(msg, type) {
+  if (!msg) {
+    banner.classList.add("hidden");
+    banner.textContent = "";
+    return;
+  }
+  banner.className = "banner " + (type || "");
+  banner.textContent = msg;
+  banner.classList.remove("hidden");
+}
 
-  // Show version & render on patches
-  room.onStateChange((state) => {
-    const versionEl = document.getElementById('version');
-    if (versionEl) versionEl.textContent = `Version: ${state.version}`;
+function log(msg) {
+  const now = new Date().toLocaleTimeString();
+  logBox.textContent = `[${now}] ${msg}\n` + logBox.textContent;
+}
 
-    const tbody = document.querySelector('#players tbody');
-    if (!tbody) return;
+// ------- Guarded action -------
+async function guarded(action) {
+  const token = getToken();
+  if (isTokenExpired(token)) {
+    setDot(STATE.EXPIRED);
+    setBanner("Session expired — please re-join.", "expired");
+    throw new Error("SESSION_EXPIRED");
+  }
+  return action();
+}
 
-    tbody.innerHTML = '';
-    if (state.players.size === 0) {
-      tbody.innerHTML = '<tr class="empty-state"><td colspan="4">No players connected</td></tr>';
+// ------- UI helpers -------
+function hydrateFromStorage() {
+  const auth = getAuth();
+  const camp = getCampaign();
+  if (auth?.user?.email) emailEl.value = auth.user.email;
+  if (auth?.user?.name) nameEl.value = auth.user.name;
+  if (camp?.slug) slugEl.value = camp.slug;
+  if (camp?.role) roleEl.value = camp.role;
+
+  if (auth?.token) {
+    if (isTokenExpired(auth.token)) {
+      setDot(STATE.EXPIRED);
+      setBanner("Session expired — please re-join.", "expired");
+      authInfo.textContent = "";
+    } else {
+      setDot(STATE.AUTHENTICATED);
+      authInfo.textContent = `Signed in as ${auth.user?.name || "?"} • token active`;
+    }
+  } else {
+    setDot(STATE.LOGGED_OUT);
+    authInfo.textContent = "";
+  }
+}
+
+function clearRoster() {
+  playersTable.innerHTML = `<tr class="empty-state"><td colspan="4">No players connected</td></tr>`;
+}
+
+function renderRoster(state) {
+  if (!state?.players) return;
+  const entries = Array.from(state.players).map(([id, p]) => p);
+  if (!entries.length) {
+    clearRoster();
+    return;
+  }
+  playersTable.innerHTML = entries.map(p =>
+    `<tr>
+      <td>${escapeHtml(p.name || "—")}</td>
+      <td>${p.hp ?? "—"}</td>
+      <td>${p.xp ?? "—"}</td>
+      <td>${escapeHtml(p.role || "—")}</td>
+    </tr>`
+  ).join("");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, m => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[m]
+  ));
+}
+
+// ------- Events -------
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const email = emailEl.value.trim();
+  const name = nameEl.value.trim();
+  const campaignSlug = slugEl.value.trim();
+  const role = roleEl.value;
+
+  if (!email || !name || !campaignSlug || !role) {
+    setBanner("Please fill all fields.", "error");
+    return;
+  }
+
+  try {
+    joinBtn.disabled = true;
+    setBanner("");
+    setDot(STATE.LOGGING_IN);
+
+    // Step 9: single call to /api/dev/login (slug+role included)
+    const { token, campaignId } = await devLogin({ email, name, campaignSlug, role });
+
+    // Update storage; we already did inside devLogin, but ensure slug/role persisted
+    const auth = getAuth() || {};
+    const camp = getCampaign() || {};
+    setAuth({ ...auth, user: { email, name, id: auth?.user?.id || null }, token });
+    setCampaign({ ...camp, slug: campaignSlug, role, id: campaignId || camp.id || null });
+
+    if (isTokenExpired(token)) {
+      setDot(STATE.EXPIRED);
+      setBanner("Session expired — please re-join.", "expired");
       return;
     }
-    for (const [id, p] of state.players) {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${p.name}</td>
-        <td>${p.hp}</td>
-        <td>${p.xp}</td>
-        <td><span class="role-badge role-${p.role}">${p.role}</span></td>
-      `;
-      tbody.appendChild(tr);
-    }
-  });
 
-  // After the FIRST patch, reliably set our desired name (if any)
-  room.onStateChange.once((state) => {
-    const nameToSet = (desiredName || '').trim();
-    if (nameToSet) {
-      room.send('op', { type: 'SET_NAME', name: nameToSet });
-      log(`Sent name: ${nameToSet}`);
-    }
-  });
+    setDot(STATE.CAMPAIGN_SELECTED);
+    authInfo.textContent = `Signed in as ${name} (${role}) • ${campaignSlug}`;
 
-  // HP / XP buttons
-  document.querySelectorAll('[data-kind]').forEach((btn) => {
-    btn.onclick = () => {
-      if (!room) return;
-      const kind = btn.dataset.kind;
-      const value = parseInt(btn.dataset.val, 10);
+    // Join room (guarded)
+    await guarded(async () => {
+      room = await joinDemoRoom();
 
-      if (kind === 'hp') {
-        room.send('op', { type: 'HP_ADD', amount: value });
-      } else if (kind === 'xp') {
-        room.send('op', { type: 'XP_ADD', amount: value });
-      }
-      log(`Sent ${kind.toUpperCase()} ${value > 0 ? '+' : ''}${value}`);
-    };
-  });
-}
+      clearRoster();
+      setDot(STATE.ROOM_CONNECTED);
+      setBanner("");
 
-joinBtn.onclick = join;
+      // Wire state updates for roster
+      room.onStateChange((state) => renderRoster(state));
+
+      // Surface room errors (helpful during dev)
+      room.onError((code, message) => {
+        setBanner(`Room error ${code}: ${message}`, "error");
+        log(`Room error ${code}: ${message}`);
+      });
+      room.onMessage("error", (m) => {
+        setBanner(`Op rejected: ${m?.reason ?? "unknown"}`, "error");
+        log(`Op rejected: ${JSON.stringify(m)}`);
+      });
+
+      // Wire ops buttons – include user id so server knows the target (self)
+      document.querySelectorAll(".op").forEach((btn) => {
+        btn.onclick = () => {
+          const kind = btn.dataset.kind;
+          const val = parseInt(btn.dataset.val, 10);
+          if (Number.isNaN(val)) return;
+
+          const authNow = getAuth();
+          const uid = authNow?.user?.id || null;
+
+          const payload = {
+            type: kind === "hp" ? "HP_ADD" : "XP_ADD",
+            amount: val,
+            id: uid, // ensure self-target present for ACL checks
+          };
+
+          room.send("op", payload);
+          log(`Sent ${payload.type} ${val > 0 ? "+" : ""}${val} (id=${uid ?? "?"})`);
+        };
+      });
+    });
+
+  } catch (err) {
+    console.error(err);
+    if (err?.message === "SESSION_EXPIRED") return;
+    setDot(STATE.LOGGED_OUT);
+    setBanner(`Join failed: ${err.message || "unknown error"}`, "error");
+  } finally {
+    joinBtn.disabled = false;
+  }
+});
+
+logoutBtn.addEventListener("click", () => {
+  if (room) {
+    try { room.leave(true); } catch {}
+    room = null;
+  }
+  clearAll();
+  clearRoster();
+  emailEl.value = ""; nameEl.value = ""; slugEl.value = "demo-campaign"; roleEl.value = "owner";
+  setDot(STATE.LOGGED_OUT);
+  setBanner("");
+  authInfo.textContent = "";
+  log("Logged out.");
+});
+
+// ------- Boot -------
+hydrateFromStorage();
+clearRoster();

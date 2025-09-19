@@ -1,40 +1,46 @@
 // client/src/auth/devLogin.js
-import { setToken, setCampaignId } from "./token";
+import { setAuth, setCampaign } from "./token.js";
 
-export async function devLogin({
-  email = "dev@example.com",
-  name = "Dev",
-  campaignSlug = "demo-campaign",
-  role = "owner",
-} = {}) {
-  console.log("🔍 devLogin called with:", { email, name, campaignSlug, role });
-  
+/**
+ * Step 9: single-step join using existing /api/dev/login
+ * Body: { email, name, campaignSlug, role }
+ * Returns: { token, (maybe campaignId via nested membership) }
+ */
+export async function devLogin({ email, name, campaignSlug, role }) {
   const res = await fetch("/api/dev/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email, name, campaignSlug, role }),
   });
 
-  // Handle both shapes: {token} or {token, campaign:{id}} etc.
-  const data = await res.json();
-  console.log("🔍 Backend response:", data);
-  
-  const token = data?.token || data?.accessToken || "";
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`devLogin failed (${res.status}): ${text || "unknown error"}`);
+  }
+
+  const data = await res.json().catch(() => ({}));
+
+  // Try several shapes for compatibility with current server
+  const token =
+    data?.token ||
+    data?.jwt ||
+    data?.access_token ||
+    "";
+
   const campaignId =
     data?.campaignId ||
     data?.campaign?.id ||
     data?.membership?.campaign_id ||
-    "";
+    null;
 
-  console.log("🔍 Extracted values:", { token: !!token, campaignId });
+  const user = {
+    id: data?.user?.id || data?.sub || null,
+    email,
+    name,
+  };
 
-  setToken(token);
-  if (campaignId) {
-    setCampaignId(campaignId);
-    console.log("✅ Campaign ID set:", campaignId);
-  } else {
-    console.error("❌ No campaign ID found in response");
-  }
+  setAuth({ token, user });
+  setCampaign({ id: campaignId, slug: campaignSlug, name: data?.campaign?.name || data?.campaign?.title || null, role });
 
   return { token, campaignId };
 }

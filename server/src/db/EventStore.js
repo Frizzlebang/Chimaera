@@ -1,36 +1,12 @@
 // BEGIN FILE: server/src/db/EventStore.js
 import { pool } from "./pool.js";
+import { randomUUID } from "crypto";
 
-/**
- * EventStore (UUID streams; multi-snapshot by version)
- *
- * Tables (expected):
- *  events(
- *    event_id UUID PK,
- *    stream_id UUID NOT NULL REFERENCES streams(stream_id) ON DELETE CASCADE,
- *    version BIGINT NOT NULL,
- *    type TEXT NOT NULL,
- *    payload JSONB NOT NULL,
- *    correlation_id UUID NULL,
- *    created_at TIMESTAMPTZ DEFAULT NOW(),
- *    UNIQUE(stream_id, version)
- *  );
- *
- *  snapshots(
- *    snapshot_id UUID PK,
- *    stream_id UUID NOT NULL REFERENCES streams(stream_id) ON DELETE CASCADE,
- *    version BIGINT NOT NULL,
- *    state JSONB NOT NULL,
- *    created_at TIMESTAMPTZ DEFAULT NOW(),
- *    UNIQUE(stream_id, version)
- *  );
- */
 export default class EventStore {
   constructor() {
     this.pool = pool;
   }
 
-  /** Get the current (max) version for a stream. */
   async getCurrentVersion(streamId, client = null) {
     const run = client ?? this.pool;
     const { rows } = await run.query(
@@ -42,17 +18,8 @@ export default class EventStore {
     return Number(rows[0]?.version || 0);
   }
 
-  /**
-   * Append a new event with optimistic concurrency.
-   * @param {string} streamId (UUID string)
-   * @param {string} type
-   * @param {object} payload
-   * @param {{expectedVersion?:number, correlationId?:string|null}} opts
-   * @returns {number} newVersion
-   */
   async append(streamId, type, payload, opts = {}) {
     const { expectedVersion, correlationId } = opts;
-
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -73,7 +40,7 @@ export default class EventStore {
           newVersion,
           type,
           JSON.stringify(payload ?? {}),
-          correlationId || null, // must be UUID or null to satisfy schema
+          correlationId || null,
         ]
       );
 
@@ -87,10 +54,6 @@ export default class EventStore {
     }
   }
 
-  /**
-   * Load the LATEST snapshot (highest version) if any.
-   * @returns {object|null} { version, state } or null
-   */
   async getLatestSnapshot(streamId) {
     const { rows } = await this.pool.query(
       `SELECT version, state
@@ -107,20 +70,23 @@ export default class EventStore {
     };
   }
 
-  /**
-   * Save snapshot at specific version (allows multiple snapshots per stream).
-   * Uses the (stream_id, version) UNIQUE constraint for idempotency.
-   */
   async saveSnapshot(streamId, version, state) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      
+      // Generate a unique snapshot_id
+      const snapshotId = randomUUID();
+      
       await client.query(
-        `INSERT INTO snapshots (stream_id, version, state)
-         VALUES ($1, $2, $3)
+        `INSERT INTO snapshots (snapshot_id, stream_id, version, state)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (stream_id, version)
-         DO UPDATE SET state = EXCLUDED.state, created_at = NOW()`,
-        [streamId, version, JSON.stringify(state ?? {})]
+         DO UPDATE SET 
+           snapshot_id = EXCLUDED.snapshot_id,
+           state = EXCLUDED.state, 
+           created_at = NOW()`,
+        [snapshotId, streamId, version, JSON.stringify(state ?? {})]
       );
       await client.query("COMMIT");
     } catch (err) {
@@ -131,7 +97,6 @@ export default class EventStore {
     }
   }
 
-  /** Load events AFTER a specific version (exclusive). */
   async getEventsAfter(streamId, afterVersion = 0, limit = 10000) {
     const { rows } = await this.pool.query(
       `SELECT version, type, payload
@@ -149,10 +114,6 @@ export default class EventStore {
     }));
   }
 
-  /**
-   * Helper to fetch snapshot + tail for fast rehydrate.
-   * @returns {object} { snapshot: {version,state} | null, tail: Event[], currentVersion: number }
-   */
   async loadForRehydrate(streamId) {
     const [snapshot, currentVersion] = await Promise.all([
       this.getLatestSnapshot(streamId),
@@ -162,6 +123,16 @@ export default class EventStore {
     const baseVersion = snapshot?.version ?? 0;
     const tail = await this.getEventsAfter(streamId, baseVersion);
     return { snapshot, tail, currentVersion };
+  }
+
+  /** Ensure a stream row exists (idempotent). */
+  async ensureStream(streamId, streamType = "demo") {
+    await this.pool.query(
+      `INSERT INTO streams (stream_id, stream_type)
+       VALUES ($1, $2)
+       ON CONFLICT (stream_id) DO NOTHING`,
+      [streamId, streamType]
+    );
   }
 }
 // END FILE: server/src/db/EventStore.js

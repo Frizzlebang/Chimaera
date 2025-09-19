@@ -1,32 +1,37 @@
 // client/src/net/joinDemo.js
 import { Client } from "colyseus.js";
-import { getToken, getCampaignId } from "../auth/token";
+import { getToken, getCampaign, isTokenExpired } from "../auth/token.js";
 
-// Same-origin WS (works with your Cloudflare tunnel setup)
-function makeWsUrl() {
-  return window.location.origin.replace(/^http/, "ws");
+function makeWsBase() {
+  const http = window.location.origin;
+  if (http.startsWith("https://")) return "wss://" + http.slice("https://".length);
+  return http.replace(/^http/, "ws");
 }
 
 export async function joinDemoRoom() {
   const token = getToken();
-  const campaignId = getCampaignId();
-  if (!token || !campaignId) {
-    throw new Error("Missing token or campaignId. Run devLogin() first or set localStorage.");
+  const campaign = getCampaign();
+
+  if (!token || !campaign?.id) {
+    throw new Error("Missing token or campaignId. Please join again.");
+  }
+  if (isTokenExpired(token)) {
+    const e = new Error("SESSION_EXPIRED");
+    e.code = "SESSION_EXPIRED";
+    throw e;
   }
 
-  const client = new Client(makeWsUrl());
-  // S4: send { token, campaignId }
-  const room = await client.joinOrCreate("demo", { token, campaignId });
-
-  // Basic listeners to prove it works
-  room.onStateChange.once((state) => {
-    console.log("[demo] initial state:", state);
-  });
-  room.onMessage("chat", (msg) => {
-    console.log("[demo] chat:", msg);
+  const client = new Client(makeWsBase());
+  const room = await client.joinOrCreate("demo", {
+    token,
+    campaignId: campaign.id,
   });
 
-  // Quick hello
+  // Proof listeners
+  room.onStateChange.once((state) => console.log("[demo] initial state:", state));
+  room.onMessage("chat", (m) => console.log("[demo] chat:", m));
+
+  // hello
   room.send("chat", { text: "hello from client" });
 
   return room;
