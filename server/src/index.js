@@ -13,6 +13,10 @@ import { initSchema } from "./db/index.js";
 import { DemoRoom } from "./rooms/DemoRoom.js";
 import devAuthRouter from "./routes/devAuth.js";
 
+import authRouter from "./routes/auth.js";
+import campaignsRouter from "./routes/campaigns.js";
+
+
 // __dirname in ESM + env
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,7 +70,9 @@ app.get("/api/health", async (_req, res) => {
 });
 
 // API routes BEFORE static/catch-all
-app.use("/api", devAuthRouter);
+app.use("/api/auth", authRouter);
+app.use("/api/campaigns", campaignsRouter);
+app.use("/api", devAuthRouter); // keep the old one-step dev route for convenience
 
 // Static & SPA catch-all
 const publicDir = path.join(__dirname, "..", "public");
