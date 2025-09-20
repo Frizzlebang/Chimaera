@@ -1,15 +1,16 @@
 <!doctype html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- Keep your CSP; if you later add style-src, include 'self' -->
-    <meta http-equiv="Content-Security-Policy"
-      content="script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; object-src 'none';">
-    <title>WEAVE Demo Room</title>
-    <link rel="stylesheet" href="/src/styles.css" />
-  </head>
-  <body>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy"
+        content="script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; object-src 'none';">
+  <title>WEAVE DEMO ROOM</title>
+  <!-- Keep your custom styles -->
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+
+  <body class="font-sans antialiased">
     <div class="container">
       <div class="left-panel">
         <!-- Auth / Join Panel -->
@@ -95,6 +96,7 @@
       </div>
     </div>
 
+    <!-- Vite bundle -->
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

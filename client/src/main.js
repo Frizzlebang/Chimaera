@@ -4,6 +4,7 @@ import {
   getToken, isTokenExpired, clearAll
 } from "./auth/token.js";
 import { joinDemoRoom } from "./net/joinDemo.js";
+import "./tailwind.css";
 
 // ------- DOM -------
 const form = document.getElementById("joinForm");
@@ -31,33 +32,36 @@ const STATE = {
 
 let room = null;
 
+// Prefer upgraded token from Dev Dock if present and valid
+function maybeAdoptUpgradedToken() {
+  try {
+    const upgraded = localStorage.getItem("JWT_UPGRADED");
+    if (!upgraded) return;
+
+    if (!isTokenExpired(upgraded)) {
+      const auth = getAuth() || {};
+      // Only replace if different, so we don't thrash storage unnecessarily
+      if (auth.token !== upgraded) {
+        setAuth({ ...auth, token: upgraded });
+        log("Adopted upgraded token from Dev Dock.");
+      }
+    }
+  } catch { /* noop */ }
+}
+
 function setDot(state) {
   connDot.className = "status dot--" + state;
-  
-  // Update the status text as well
-  const statusText = connDot.querySelector('.status-text');
+
+  const statusText = connDot.querySelector(".status-text");
   if (statusText) {
-    switch(state) {
-      case STATE.LOGGED_OUT:
-        statusText.textContent = 'disconnected';
-        break;
-      case STATE.LOGGING_IN:
-        statusText.textContent = 'connecting';
-        break;
-      case STATE.AUTHENTICATED:
-        statusText.textContent = 'authenticated';
-        break;
-      case STATE.CAMPAIGN_SELECTED:
-        statusText.textContent = 'ready';
-        break;
-      case STATE.ROOM_CONNECTED:
-        statusText.textContent = 'connected';
-        break;
-      case STATE.EXPIRED:
-        statusText.textContent = 'expired';
-        break;
-      default:
-        statusText.textContent = 'unknown';
+    switch (state) {
+      case STATE.LOGGED_OUT:       statusText.textContent = "disconnected"; break;
+      case STATE.LOGGING_IN:       statusText.textContent = "connecting";   break;
+      case STATE.AUTHENTICATED:    statusText.textContent = "authenticated";break;
+      case STATE.CAMPAIGN_SELECTED:statusText.textContent = "ready";        break;
+      case STATE.ROOM_CONNECTED:   statusText.textContent = "connected";    break;
+      case STATE.EXPIRED:          statusText.textContent = "expired";      break;
+      default:                     statusText.textContent = "unknown";
     }
   }
 }
@@ -91,6 +95,9 @@ async function guarded(action) {
 
 // ------- UI helpers -------
 function hydrateFromStorage() {
+  // If Dev Dock already upgraded the token, adopt it
+  maybeAdoptUpgradedToken();
+
   const auth = getAuth();
   const camp = getCampaign();
   if (auth?.user?.email) emailEl.value = auth.user.email;
@@ -159,10 +166,11 @@ form.addEventListener("submit", async (e) => {
     setBanner("");
     setDot(STATE.LOGGING_IN);
 
-    // Step 9: single call to /api/dev/login (slug+role included)
+    // Step 9 (legacy single-step for the public form):
+    // POST /api/dev/login (includes slug + role)
     const { token, campaignId } = await devLogin({ email, name, campaignSlug, role });
 
-    // Update storage; we already did inside devLogin, but ensure slug/role persisted
+    // Persist auth + campaign
     const auth = getAuth() || {};
     const camp = getCampaign() || {};
     setAuth({ ...auth, user: { email, name, id: auth?.user?.id || null }, token });
@@ -188,7 +196,7 @@ form.addEventListener("submit", async (e) => {
       // Wire state updates for roster
       room.onStateChange((state) => renderRoster(state));
 
-      // Surface room errors (helpful during dev)
+      // Surface room errors
       room.onError((code, message) => {
         setBanner(`Room error ${code}: ${message}`, "error");
         log(`Room error ${code}: ${message}`);
@@ -198,7 +206,7 @@ form.addEventListener("submit", async (e) => {
         log(`Op rejected: ${JSON.stringify(m)}`);
       });
 
-      // Wire ops buttons – include user id so server knows the target (self)
+      // Wire ops buttons — include user id so server knows the target (self)
       document.querySelectorAll(".op").forEach((btn) => {
         btn.onclick = () => {
           const kind = btn.dataset.kind;
@@ -237,7 +245,10 @@ logoutBtn.addEventListener("click", () => {
   }
   clearAll();
   clearRoster();
-  emailEl.value = ""; nameEl.value = ""; slugEl.value = "demo-campaign"; roleEl.value = "owner";
+  emailEl.value = "";
+  nameEl.value = "";
+  slugEl.value = "demo-campaign";
+  roleEl.value = "owner";
   setDot(STATE.LOGGED_OUT);
   setBanner("");
   authInfo.textContent = "";
@@ -247,3 +258,59 @@ logoutBtn.addEventListener("click", () => {
 // ------- Boot -------
 hydrateFromStorage();
 clearRoster();
+
+// ------- Dev Dock Mount (Fixed) -------
+(() => {
+  // Safe reads (avoid ReferenceErrors and give clear logs)
+  const viteEnv = (typeof import.meta !== "undefined" && import.meta.env) || {};
+  const FLAG = (viteEnv.VITE_DEVTOOLS ?? "0") === "1";
+  
+  // Safe localStorage check with fallback
+  let LOCAL = false;
+  try {
+    LOCAL = localStorage.getItem("DEV_ENABLED") === "1";
+  } catch (e) {
+    console.warn("[Dock] localStorage not available:", e.message);
+    // In development mode, enable by default if localStorage fails
+    LOCAL = viteEnv.MODE === 'development';
+  }
+
+  console.log("[Dock] VITE_DEVTOOLS =", viteEnv.VITE_DEVTOOLS, "| DEV_ENABLED =", LOCAL, "| MODE =", viteEnv.MODE);
+
+  if (!FLAG) {
+    console.log("[Dock] Not mounting Dev Dock: VITE_DEVTOOLS != '1' (rebuild needed?)");
+    return;
+  }
+
+  if (!LOCAL && viteEnv.MODE !== 'development') {
+    console.log("[Dock] Not mounting Dev Dock: localStorage.DEV_ENABLED != '1' and not in development mode");
+    console.log("[Dock] To enable: localStorage.setItem('DEV_ENABLED','1')");
+    return;
+  }
+
+  // Lazy-load React + Dock
+  Promise.all([
+    import("react"),
+    import("react-dom/client"),
+    import("./devdock/DevDock.tsx"),
+  ]).then(([React, ReactDOMClient, DevDockMod]) => {
+    try {
+      const dockDiv = document.createElement("div");
+      dockDiv.id = "dev-dock-root";
+      document.body.appendChild(dockDiv);
+
+      // react-dom/client exports { createRoot }
+      const { createRoot } = ReactDOMClient;
+      const root = createRoot(dockDiv);
+      root.render(React.createElement(DevDockMod.default));
+      console.log("[Dock] Dev Dock mounted successfully.");
+      log("Dev Dock mounted.");
+    } catch (e) {
+      console.error("[Dock] Failed to render Dev Dock:", e);
+      log("Dev Dock failed to mount: " + e.message);
+    }
+  }).catch((e) => {
+    console.error("[Dock] Failed to load Dev Dock chunks:", e);
+    log("Dev Dock chunks failed to load: " + e.message);
+  });
+})();

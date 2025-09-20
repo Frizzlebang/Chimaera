@@ -1,0 +1,182 @@
+/* BEGIN REPLACE: client/src/devdock.css */
+
+/* Cyberpunk-ish tokens (scoped to dock) */
+.devdock {
+  --acc: #22d3ee;                 /* neon cyan */
+  --acc-2: #a78bfa;               /* backup lilac for glow mixes */
+
+  --bg-input: rgba(255,255,255,0.035);
+  --bg-input-focus: rgba(34, 211, 238, 0.09);   /* touch brighter focus */
+  --bd-input: rgba(34, 211, 238, 0.32);         /* slightly stronger border */
+  --bd-input-muted: rgba(255,255,255,0.08);
+
+  --bd-button: rgba(167, 139, 250, 0.40);       /* a bit more pop */
+  --bg-button: rgba(167, 139, 250, 0.20);
+  --bg-button-hover: rgba(167, 139, 250, 0.32);
+
+  --shadow-focus: 0 0 0 2px rgba(34, 211, 238, 0.34),
+                  0 0 18px rgba(34, 211, 238, 0.14);
+
+  --fg-strong: #fff;
+  --fg-muted: rgba(255,255,255,0.80);
+  --fg-subtle: rgba(255,255,255,0.62);
+
+  --sep: linear-gradient(
+    90deg,
+    rgba(34, 211, 238, 0.28),
+    rgba(167, 139, 250, 0.22) 45%,
+    rgba(34, 211, 238, 0.28)
+  );
+}
+
+/* Overall breathing room */
+.devdock { padding-bottom: 16px; }
+.devdock section { margin-top: 34px; }                  /* more space between sections */
+.devdock section:first-of-type { margin-top: 14px; }
+
+/* Optional separator element */
+.devdock .section-sep {
+  height: 1px;
+  background: var(--sep);
+  margin: 26px 0 20px;
+  border-radius: 999px;
+}
+
+/* Headings */
+.devdock h3, .devdock h4, .devdock h5 {
+  color: var(--fg-strong);
+  letter-spacing: .2px;
+  margin: 0 0 14px 0;
+}
+
+/* Labels + small text */
+.devdock label, .devdock .hint, .devdock small {
+  color: var(--fg-subtle);
+}
+
+/* Forms: consistent vertical rhythm without touching JSX */
+.devdock form { 
+  display: grid; 
+  grid-auto-rows: min-content; 
+  row-gap: 14px;                                     /* tighter rhythm */
+}
+.devdock form > * { margin: 0; }                      /* kill odd default margins */
+
+/* Inputs/Textareas/Selects — darker bg, cyan border */
+.devdock input,
+.devdock select,
+.devdock textarea {
+  background-color: var(--bg-input);
+  border: 1px solid var(--bd-input);
+  border-radius: 12px;
+  padding: 11px 13px;
+  color: var(--fg-strong);
+  font-size: 0.97rem;
+  transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease, transform .05s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.devdock textarea {
+  resize: vertical;
+  min-height: 48px;
+  line-height: 1.38;
+}
+
+.devdock input:hover,
+.devdock select:hover,
+.devdock textarea:hover {
+  border-color: rgba(34, 211, 238, 0.46);            /* hover contrast */
+}
+
+.devdock input:focus,
+.devdock select:focus,
+.devdock textarea:focus {
+  outline: none;
+  background-color: var(--bg-input-focus);
+  border-color: var(--acc);
+  box-shadow: var(--shadow-focus);
+}
+
+/* Buttons — brighter lilac with hover */
+.devdock button {
+  background-color: var(--bg-button);
+  border: 1px solid var(--bd-button);
+  border-radius: 12px;
+  padding: 10px 14px;
+  color: var(--fg-strong);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color .15s ease, transform .05s ease, box-shadow .15s ease;
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.22);
+}
+
+.devdock button:hover {
+  background-color: var(--bg-button-hover);
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.3), 0 0 12px rgba(167, 139, 250, 0.18);
+}
+
+.devdock button:active { transform: translateY(1px); }
+
+/* Placeholder */
+.devdock ::placeholder { color: var(--fg-muted); }
+
+/* BEGIN INSERT: action row helpers */
+.devdock .row.actions-right {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;     /* push buttons to the right */
+}
+
+/* BEGIN INSERT: layout + buttons for panels */
+.devdock .row.hstack { display: flex; gap: 10px; align-items: center; }
+.devdock .row.actions-right { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
+.devdock .grow { flex: 1; min-width: 0; }
+
+.devdock .inline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.devdock .btn-sm {
+  background-color: var(--bg-button);
+  border: 1px solid var(--bd-button);
+  border-radius: 10px;
+  padding: 6px 10px;
+  color: var(--fg-strong);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color .15s ease, box-shadow .15s ease, transform .05s ease;
+}
+.devdock .btn-sm:hover {
+  background-color: var(--bg-button-hover);
+  box-shadow: 0 0 0 1px rgba(167,139,250,0.25), 0 0 10px rgba(167,139,250,0.18);
+}
+
+/* BEGIN INSERT: console button + row */
+.devdock .console-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.devdock .btn-orange {
+  background: #f59e0b; /* orange-500 */
+  border: 1px solid rgba(0,0,0,0.15);
+  color: #111;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-weight: 700;
+  transition: transform .05s ease, box-shadow .15s ease, background .15s ease;
+}
+.devdock .btn-orange:hover {
+  background: #fbbf24; /* orange-400 */
+  box-shadow: 0 0 12px rgba(251,191,36,0.25);
+}
+.devdock .btn-orange:active { transform: translateY(1px); }
+.devdock .btn-orange.copied { background: #34d399; color: #063; } /* green feedback */
+/* END INSERT */
+

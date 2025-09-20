@@ -1,3 +1,7 @@
+/* Fix: Google Fonts import MUST be first */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
+
+/* Your existing styles (unchanged) */
 .players-section {
   flex: 1;
   display: flex;
@@ -20,7 +24,9 @@
 
 .logo-container img:hover {
   opacity: 0.8;
-}:root {
+}
+
+:root {
   --primary: #44C7B1;
   --primary-dark: #3AB19B;
   --success: #22c55e;
@@ -46,8 +52,6 @@
 html, body {
   height: 100%;
 }
-
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
